@@ -1,13 +1,21 @@
-import sqlite3 from "sqlite3";
+import Database from "better-sqlite3";
+import path from "path";
 
-export const db = new sqlite3.Database("leads.db");
+// Ruta absoluta (importante para Render)
+const dbPath = path.join(process.cwd(), "leads.db");
 
-db.run(`
+// Abrimos la base de datos
+export const db = new Database(dbPath);
+
+// Crear tabla si no existe
+db.prepare(`
   CREATE TABLE IF NOT EXISTS leads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    email TEXT,
-    message TEXT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    message TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
-`);
+`).run();
+
+console.log("✅ SQLite database initialized");

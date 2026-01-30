@@ -6,17 +6,21 @@ const router = Router();
 router.post("/", (req, res) => {
   const { name, email, message } = req.body;
 
-  if (!name || !email) {
-    return res.status(400).json({ error: "Missing required fields" });
+  if (!name || !email || !message) {
+    return res.status(400).json({ error: "Missing fields" });
   }
 
-  db.run(
-    "INSERT INTO leads (name, email, message) VALUES (?, ?, ?)",
-    [name, email, message || ""],
-    () => {
-      res.json({ success: true });
-    }
-  );
+  try {
+    const stmt = db.prepare(
+      "INSERT INTO leads (name, email, message) VALUES (?, ?, ?)"
+    );
+    stmt.run(name, email, message);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Database error" });
+  }
 });
 
 export default router;
