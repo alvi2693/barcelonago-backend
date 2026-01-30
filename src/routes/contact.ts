@@ -1,26 +1,25 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { db } from "../db";
 
 const router = Router();
 
-router.post("/", (req, res) => {
+router.post("/contact", (req: Request, res: Response) => {
   const { name, email, message } = req.body;
 
   if (!name || !email || !message) {
     return res.status(400).json({ error: "Missing fields" });
   }
 
-  try {
-    const stmt = db.prepare(
-      "INSERT INTO leads (name, email, message) VALUES (?, ?, ?)"
-    );
-    stmt.run(name, email, message);
+  const stmt = db.prepare(`
+    INSERT INTO leads (name, email, message)
+    VALUES (?, ?, ?)
+  `);
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Database error" });
-  }
+  stmt.run(name, email, message);
+
+  console.log("📩 New lead saved:", { name, email, message });
+
+  res.json({ success: true });
 });
 
 export default router;

@@ -1,28 +1,20 @@
-import express, { Request, Response } from "express";
+import express from "express";
 import cors from "cors";
-import { saveLead } from "./db";
+import contactRoutes from "./routes/contact";
+import "./db"; // inicializa la DB
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (_req: Request, res: Response) => {
-  res.json({ status: "BarcelonaGo backend running 🚀" });
+app.get("/", (_req, res) => {
+  res.send("🚀 BarcelonaGo Backend is running");
 });
 
-app.post("/contact", (req: Request, res: Response) => {
-  const { name, email, message } = req.body;
+app.use(contactRoutes);
 
-  if (!name || !email || !message) {
-    return res.status(400).json({ error: "Missing fields" });
-  }
-
-  saveLead({ name, email, message });
-
-  res.json({ success: true });
-});
+const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
