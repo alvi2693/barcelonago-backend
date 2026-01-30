@@ -1,21 +1,22 @@
-import Database from "better-sqlite3";
-import path from "path";
+export type Lead = {
+  name: string;
+  email: string;
+  message: string;
+  created_at: string;
+};
 
-// Ruta absoluta (importante para Render)
-const dbPath = path.join(process.cwd(), "leads.db");
+// Simulación de almacenamiento (solo para desarrollo / MVP)
+const leads: Lead[] = [];
 
-// Abrimos la base de datos
-export const db = new Database(dbPath);
+export function saveLead(lead: Omit<Lead, "created_at">) {
+  const newLead: Lead = {
+    ...lead,
+    created_at: new Date().toISOString(),
+  };
 
-// Crear tabla si no existe
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    message TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
+  leads.push(newLead);
 
-console.log("✅ SQLite database initialized");
+  console.log("📩 New lead saved:", newLead);
+
+  return newLead;
+}
