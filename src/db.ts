@@ -40,5 +40,10 @@ export async function initDb() {
     )
   `);
 
+  // Añadir columna price_per_night si no existe
+  await pool.query(`
+    ALTER TABLE reservations ADD COLUMN IF NOT EXISTS price_per_night NUMERIC
+  `);
+
   console.log('✅ PostgreSQL database initialized');
 }

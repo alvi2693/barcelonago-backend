@@ -40,7 +40,7 @@ router.get("/admin/reservations/room/:roomId", authMiddleware, async (req: Reque
 });
 
 router.post("/admin/reservations", authMiddleware, async (req: Request, res: Response) => {
-  const { room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_paid, payment_status, payment_method, channel, notes } = req.body;
+  const { room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_per_night, price_paid, payment_status, payment_method, channel, notes } = req.body;
 
   if (!room_id || !guest_name || !check_in || !check_out)
     return res.status(400).json({ error: "Missing required fields" });
@@ -50,16 +50,16 @@ router.post("/admin/reservations", authMiddleware, async (req: Request, res: Res
     return res.status(409).json({ error: "Ya existe una reserva en esa habitación para esas fechas" });
 
   const result = await pool.query(`
-    INSERT INTO reservations (room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_paid, payment_status, payment_method, channel, notes)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id
-  `, [room_id, room_name, guest_name, guest_email || null, guest_phone || null, guest_nationality || null, num_persons || 1, check_in, check_out, price_total || null, price_paid || 0, payment_status || 'pending', payment_method || 'Efectivo', channel || 'whatsapp', notes || null]);
+    INSERT INTO reservations (room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_per_night, price_paid, payment_status, payment_method, channel, notes)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id
+  `, [room_id, room_name, guest_name, guest_email || null, guest_phone || null, guest_nationality || null, num_persons || 1, check_in, check_out, price_total || null, price_per_night || null, price_paid || 0, payment_status || 'pending', payment_method || 'Efectivo', channel || 'whatsapp', notes || null]);
 
   res.json({ success: true, id: result.rows[0].id });
 });
 
 router.put("/admin/reservations/:id", authMiddleware, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const { room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_paid, payment_status, payment_method, channel, notes } = req.body;
+  const { room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_per_night, price_paid, payment_status, payment_method, channel, notes } = req.body;
 
   if (check_in >= check_out)
     return res.status(400).json({ error: "Check-out debe ser posterior al check-in" });
@@ -74,10 +74,10 @@ router.put("/admin/reservations/:id", authMiddleware, async (req: Request, res: 
     UPDATE reservations SET
       room_id=$1, room_name=$2, guest_name=$3, guest_email=$4, guest_phone=$5,
       guest_nationality=$6, num_persons=$7, check_in=$8, check_out=$9,
-      price_total=$10, price_paid=$11, payment_status=$12, payment_method=$13,
-      channel=$14, notes=$15
-    WHERE id=$16
-  `, [effectiveRoomId, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_paid, payment_status, payment_method || 'Efectivo', channel, notes, id]);
+      price_total=$10, price_per_night=$11, price_paid=$12, payment_status=$13,
+      payment_method=$14, channel=$15, notes=$16
+    WHERE id=$17
+  `, [effectiveRoomId, room_name, guest_name, guest_email, guest_phone, guest_nationality, num_persons, check_in, check_out, price_total, price_per_night || null, price_paid, payment_status, payment_method || 'Efectivo', channel, notes, id]);
 
   res.json({ success: true });
 });
