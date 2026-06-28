@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import contactRoutes from "./routes/contact";
 import reservationRoutes from "./routes/reservations";
-import "./db";
+import { initDb } from "./db";
 
 const app = express();
 
@@ -18,6 +18,11 @@ app.use(reservationRoutes);
 
 const PORT = process.env.PORT || 3001;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+initDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}).catch(err => {
+  console.error('Failed to initialize database:', err);
+  process.exit(1);
 });
