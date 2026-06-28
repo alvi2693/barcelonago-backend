@@ -26,19 +26,29 @@ function authMiddleware(req: Request, res: Response, next: Function) {
   }
 }
 
+// Verificar solapamiento de fechas
+function checkOverlap(room_id: number, check_in: string, check_out: string, excludeId?: number): boolean {
+  const query = excludeId
+    ? `SELECT id FROM reservations WHERE room_id = ? AND id != ? AND check_in < ? AND check_out > ?`
+    : `SELECT id FROM reservations WHERE room_id = ? AND check_in < ? AND check_out > ?`;
+
+  const params = excludeId
+    ? [room_id, excludeId, check_out, check_in]
+    : [room_id, check_out, check_in];
+
+  const existing = db.prepare(query).get(...params as [any]);
+  return !!existing;
+}
+
 // GET todas las reservas
 router.get("/admin/reservations", authMiddleware, (_req: Request, res: Response) => {
-  const rows = db.prepare(`
-    SELECT * FROM reservations ORDER BY check_in ASC
-  `).all();
+  const rows = db.prepare(`SELECT * FROM reservations ORDER BY check_in ASC`).all();
   res.json(rows);
 });
 
 // GET reservas por habitación
 router.get("/admin/reservations/room/:roomId", authMiddleware, (req: Request, res: Response) => {
-  const rows = db.prepare(`
-    SELECT * FROM reservations WHERE room_id = ? ORDER BY check_in ASC
-  `).all(req.params.roomId);
+  const rows = db.prepare(`SELECT * FROM reservations WHERE room_id = ? ORDER BY check_in ASC`).all(req.params.roomId);
   res.json(rows);
 });
 
@@ -54,15 +64,21 @@ router.post("/admin/reservations", authMiddleware, (req: Request, res: Response)
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  const stmt = db.prepare(`
+  if (check_in >= check_out) {
+    return res.status(400).json({ error: "Check-out debe ser posterior al check-in" });
+  }
+
+  if (checkOverlap(room_id, check_in, check_out)) {
+    return res.status(409).json({ error: "Ya existe una reserva en esa habitación para esas fechas" });
+  }
+
+  const result = db.prepare(`
     INSERT INTO reservations (
       room_id, room_name, guest_name, guest_email, guest_phone,
       guest_nationality, num_persons, check_in, check_out,
       price_total, price_paid, payment_status, channel, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const result = stmt.run(
+  `).run(
     room_id, room_name, guest_name, guest_email || null, guest_phone || null,
     guest_nationality || null, num_persons || 1, check_in, check_out,
     price_total || null, price_paid || 0, payment_status || "pending",
@@ -74,11 +90,24 @@ router.post("/admin/reservations", authMiddleware, (req: Request, res: Response)
 
 // PUT actualizar reserva
 router.put("/admin/reservations/:id", authMiddleware, (req: Request, res: Response) => {
+  const id = Number(req.params.id);
   const {
-    guest_name, guest_email, guest_phone, guest_nationality,
+    room_id, guest_name, guest_email, guest_phone, guest_nationality,
     num_persons, check_in, check_out, price_total, price_paid,
     payment_status, channel, notes
   } = req.body;
+
+  if (check_in >= check_out) {
+    return res.status(400).json({ error: "Check-out debe ser posterior al check-in" });
+  }
+
+  // Obtener room_id actual si no viene en el body
+  const current = db.prepare(`SELECT room_id FROM reservations WHERE id = ?`).get(id) as any;
+  const effectiveRoomId = room_id || current?.room_id;
+
+  if (checkOverlap(effectiveRoomId, check_in, check_out, id)) {
+    return res.status(409).json({ error: "Ya existe una reserva en esa habitación para esas fechas" });
+  }
 
   db.prepare(`
     UPDATE reservations SET
@@ -90,7 +119,7 @@ router.put("/admin/reservations/:id", authMiddleware, (req: Request, res: Respon
   `).run(
     guest_name, guest_email, guest_phone, guest_nationality,
     num_persons, check_in, check_out, price_total, price_paid,
-    payment_status, channel, notes, req.params.id
+    payment_status, channel, notes, id
   );
 
   res.json({ success: true });
