@@ -76,13 +76,13 @@ router.post("/admin/reservations", authMiddleware, (req: Request, res: Response)
     INSERT INTO reservations (
       room_id, room_name, guest_name, guest_email, guest_phone,
       guest_nationality, num_persons, check_in, check_out,
-      price_total, price_paid, payment_status, channel, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      price_total, price_paid, payment_status, payment_method, channel, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     room_id, room_name, guest_name, guest_email || null, guest_phone || null,
     guest_nationality || null, num_persons || 1, check_in, check_out,
     price_total || null, price_paid || 0, payment_status || "pending",
-    channel || "whatsapp", notes || null
+    req.body.payment_method || "Efectivo", channel || "whatsapp", notes || null
   );
 
   res.json({ success: true, id: result.lastInsertRowid });
@@ -114,12 +114,12 @@ router.put("/admin/reservations/:id", authMiddleware, (req: Request, res: Respon
       guest_name = ?, guest_email = ?, guest_phone = ?,
       guest_nationality = ?, num_persons = ?, check_in = ?,
       check_out = ?, price_total = ?, price_paid = ?,
-      payment_status = ?, channel = ?, notes = ?
+      payment_status = ?, payment_method = ?, channel = ?, notes = ?
     WHERE id = ?
   `).run(
     guest_name, guest_email, guest_phone, guest_nationality,
     num_persons, check_in, check_out, price_total, price_paid,
-    payment_status, channel, notes, id
+    payment_status, req.body.payment_method || "Efectivo", channel, notes, id
   );
 
   res.json({ success: true });

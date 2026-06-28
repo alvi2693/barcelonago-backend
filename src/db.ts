@@ -33,6 +33,7 @@ db.prepare(`
     payment_status TEXT DEFAULT 'pending',
     channel TEXT DEFAULT 'whatsapp',
     notes TEXT,
+    payment_method TEXT DEFAULT 'Efectivo',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `).run();
