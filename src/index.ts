@@ -3,6 +3,7 @@ import cors from "cors";
 import contactRoutes from "./routes/contact";
 import reservationRoutes from "./routes/reservations";
 import notificationRoutes, { initNotifications, sendDailyNotifications } from "./routes/notifications";
+import expenseRoutes from "./routes/expenses";
 import { initDb } from "./db";
 
 const app = express();
@@ -17,6 +18,7 @@ app.get("/", (_req, res) => {
 app.use(contactRoutes);
 app.use(reservationRoutes);
 app.use(notificationRoutes);
+app.use(expenseRoutes);
 
 const PORT = process.env.PORT || 3001;
 
