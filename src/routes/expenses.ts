@@ -24,9 +24,9 @@ router.post("/admin/expenses", authMiddleware, async (req: Request, res: Respons
     return res.status(400).json({ error: "Missing required fields" });
 
   const result = await pool.query(`
-    INSERT INTO expenses (property_id, property_name, category, description, amount, date)
-    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-  `, [property_id, property_name, category, description, Number(amount), date]);
+    INSERT INTO expenses (property_id, property_name, category, description, amount, date, payment_method)
+    VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
+  `, [property_id, property_name, category, description, Number(amount), date, req.body.payment_method || 'Efectivo']);
 
   res.json({ success: true, id: result.rows[0].id });
 });
@@ -35,9 +35,9 @@ router.post("/admin/expenses", authMiddleware, async (req: Request, res: Respons
 router.put("/admin/expenses/:id", authMiddleware, async (req: Request, res: Response) => {
   const { property_id, property_name, category, description, amount, date } = req.body;
   await pool.query(`
-    UPDATE expenses SET property_id=$1, property_name=$2, category=$3, description=$4, amount=$5, date=$6
-    WHERE id=$7
-  `, [property_id, property_name, category, description, Number(amount), date, req.params.id]);
+    UPDATE expenses SET property_id=$1, property_name=$2, category=$3, description=$4, amount=$5, date=$6, payment_method=$7
+    WHERE id=$8
+  `, [property_id, property_name, category, description, Number(amount), date, req.body.payment_method || 'Efectivo', req.params.id]);
   res.json({ success: true });
 });
 
