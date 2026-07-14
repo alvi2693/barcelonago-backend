@@ -3,6 +3,11 @@ import { pool } from "../db";
 
 const router = Router();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "bcnrooms2024";
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "sagrada2026";
+
+// Piso gestionado para un tercero (no es nuestro).
+const MANAGED_ROOM_IDS = [7]; // Sagrada Família
+const DEFAULT_COMMISSION_PER_PAX_NIGHT = 4;
 
 router.post("/admin/login", (req: Request, res: Response) => {
   const { password } = req.body;
@@ -13,9 +18,27 @@ router.post("/admin/login", (req: Request, res: Response) => {
   }
 });
 
+// Login separado para el propietario de Sagrada Família (solo lectura)
+router.post("/owner/login", (req: Request, res: Response) => {
+  const { password } = req.body;
+  if (password === OWNER_PASSWORD) {
+    res.json({ success: true, token: Buffer.from(OWNER_PASSWORD).toString("base64") });
+  } else {
+    res.status(401).json({ error: "Invalid password" });
+  }
+});
+
 function authMiddleware(req: Request, res: Response, next: Function) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   const expected = Buffer.from(ADMIN_PASSWORD).toString("base64");
+  if (token === expected) next();
+  else res.status(401).json({ error: "Unauthorized" });
+}
+
+// Solo permite el token del propietario. NO da acceso a otros pisos.
+function ownerAuthMiddleware(req: Request, res: Response, next: Function) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  const expected = Buffer.from(OWNER_PASSWORD).toString("base64");
   if (token === expected) next();
   else res.status(401).json({ error: "Unauthorized" });
 }
@@ -36,6 +59,17 @@ function calcPaymentStatus(price_total: number, deposit: number, checkin: number
   return 'partial';
 }
 
+// Comisión sugerida al crear una reserva de piso gestionado.
+// Es solo un valor por defecto: el admin puede editarlo y se guarda el real.
+function suggestCommission(room_id: number, num_persons: number, check_in: string, check_out: string): number {
+  if (!MANAGED_ROOM_IDS.includes(Number(room_id))) return 0;
+  const nights = Math.max(
+    0,
+    Math.round((new Date(check_out).getTime() - new Date(check_in).getTime()) / 86400000)
+  );
+  return DEFAULT_COMMISSION_PER_PAX_NIGHT * (Number(num_persons) || 1) * nights;
+}
+
 router.get("/admin/reservations", authMiddleware, async (_req: Request, res: Response) => {
   const result = await pool.query(`SELECT * FROM reservations ORDER BY check_in ASC`);
   res.json(result.rows);
@@ -46,11 +80,43 @@ router.get("/admin/reservations/room/:roomId", authMiddleware, async (req: Reque
   res.json(result.rows);
 });
 
+// ─────────────────────────────────────────────
+// VISTA DEL PROPIETARIO — solo Sagrada Família
+// Nunca expone otros pisos ni nuestras cuentas.
+// ─────────────────────────────────────────────
+router.get("/owner/reservations", ownerAuthMiddleware, async (_req: Request, res: Response) => {
+  const result = await pool.query(`
+    SELECT
+      id, guest_name, guest_nationality, num_persons,
+      check_in, check_out, price_total,
+      commission_amount, collected_by_us, channel,
+      (check_out - check_in) AS nights
+    FROM reservations
+    WHERE room_id = ANY($1::int[])
+    ORDER BY check_in ASC
+  `, [MANAGED_ROOM_IDS]);
+
+  const rows = result.rows.map((r: any) => {
+    const priceTotal = Number(r.price_total) || 0;
+    const commission = Number(r.commission_amount) || 0;
+    return {
+      ...r,
+      price_total: priceTotal,
+      commission_amount: commission,
+      // Lo que le corresponde al propietario
+      owner_income: priceTotal - commission,
+    };
+  });
+
+  res.json(rows);
+});
+
 router.post("/admin/reservations", authMiddleware, async (req: Request, res: Response) => {
   const {
     room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality,
     num_persons, check_in, check_out, price_total, price_per_night,
-    deposit_amount, deposit_method, checkin_amount, checkin_method, channel, notes
+    deposit_amount, deposit_method, checkin_amount, checkin_method, channel, notes,
+    commission_amount, collected_by_us
   } = req.body;
 
   if (!room_id || !guest_name || !check_in || !check_out)
@@ -66,13 +132,21 @@ router.post("/admin/reservations", authMiddleware, async (req: Request, res: Res
   const price_paid = dep + chk;
   const payment_status = calcPaymentStatus(total, dep, chk);
 
+  // Si el front no manda comisión, la sugerimos. Si la manda (aunque sea 0), respetamos su valor.
+  const commission = commission_amount !== undefined && commission_amount !== null && commission_amount !== ''
+    ? Number(commission_amount) || 0
+    : suggestCommission(room_id, num_persons, check_in, check_out);
+
+  const collected = collected_by_us === true || collected_by_us === 'true';
+
   const result = await pool.query(`
     INSERT INTO reservations (
       room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality,
       num_persons, check_in, check_out, price_total, price_per_night,
       deposit_amount, deposit_method, checkin_amount, checkin_method,
-      price_paid, payment_status, channel, notes
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      price_paid, payment_status, channel, notes,
+      commission_amount, collected_by_us
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
     RETURNING id
   `, [
     room_id, room_name, guest_name, guest_email || null, guest_phone || null,
@@ -80,7 +154,8 @@ router.post("/admin/reservations", authMiddleware, async (req: Request, res: Res
     total || null, price_per_night || null,
     dep, deposit_method || 'Transferencia',
     chk, checkin_method || 'Efectivo',
-    price_paid, payment_status, channel || 'whatsapp', notes || null
+    price_paid, payment_status, channel || 'whatsapp', notes || null,
+    commission, collected
   ]);
 
   res.json({ success: true, id: result.rows[0].id });
@@ -91,7 +166,8 @@ router.put("/admin/reservations/:id", authMiddleware, async (req: Request, res: 
   const {
     room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality,
     num_persons, check_in, check_out, price_total, price_per_night,
-    deposit_amount, deposit_method, checkin_amount, checkin_method, channel, notes
+    deposit_amount, deposit_method, checkin_amount, checkin_method, channel, notes,
+    commission_amount, collected_by_us
   } = req.body;
 
   if (check_in >= check_out)
@@ -109,6 +185,9 @@ router.put("/admin/reservations/:id", authMiddleware, async (req: Request, res: 
   const price_paid = dep + chk;
   const payment_status = calcPaymentStatus(total, dep, chk);
 
+  const commission = Number(commission_amount) || 0;
+  const collected = collected_by_us === true || collected_by_us === 'true';
+
   await pool.query(`
     UPDATE reservations SET
       room_id=$1, room_name=$2, guest_name=$3, guest_email=$4, guest_phone=$5,
@@ -116,15 +195,17 @@ router.put("/admin/reservations/:id", authMiddleware, async (req: Request, res: 
       price_total=$10, price_per_night=$11,
       deposit_amount=$12, deposit_method=$13,
       checkin_amount=$14, checkin_method=$15,
-      price_paid=$16, payment_status=$17, channel=$18, notes=$19
-    WHERE id=$20
+      price_paid=$16, payment_status=$17, channel=$18, notes=$19,
+      commission_amount=$20, collected_by_us=$21
+    WHERE id=$22
   `, [
     effectiveRoomId, room_name, guest_name, guest_email, guest_phone,
     guest_nationality, num_persons, check_in, check_out,
     total || null, price_per_night || null,
     dep, deposit_method || 'Transferencia',
     chk, checkin_method || 'Efectivo',
-    price_paid, payment_status, channel, notes, id
+    price_paid, payment_status, channel, notes,
+    commission, collected, id
   ]);
 
   res.json({ success: true });
@@ -135,9 +216,7 @@ router.delete("/admin/reservations/:id", authMiddleware, async (req: Request, re
   res.json({ success: true });
 });
 
-export default router;
-
-// PATCH — marcar pago rápido en efectivo al ingresar
+// PATCH — registrar pago al ingreso
 router.patch("/admin/reservations/:id/checkin-payment", authMiddleware, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const { checkin_amount, checkin_method } = req.body;
@@ -160,3 +239,5 @@ router.patch("/admin/reservations/:id/checkin-payment", authMiddleware, async (r
 
   res.json({ success: true, price_paid, payment_status });
 });
+
+export default router;
