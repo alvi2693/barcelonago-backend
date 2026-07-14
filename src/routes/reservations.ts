@@ -136,3 +136,27 @@ router.delete("/admin/reservations/:id", authMiddleware, async (req: Request, re
 });
 
 export default router;
+
+// PATCH — marcar pago rápido en efectivo al ingresar
+router.patch("/admin/reservations/:id/checkin-payment", authMiddleware, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { checkin_amount, checkin_method } = req.body;
+
+  const current = await pool.query(`SELECT price_total, deposit_amount FROM reservations WHERE id = $1`, [id]);
+  if (!current.rows[0]) return res.status(404).json({ error: "Reserva no encontrada" });
+
+  const price_total = Number(current.rows[0].price_total) || 0;
+  const deposit = Number(current.rows[0].deposit_amount) || 0;
+  const chk = Number(checkin_amount) || 0;
+  const price_paid = deposit + chk;
+  const payment_status = calcPaymentStatus(price_total, deposit, chk);
+
+  await pool.query(`
+    UPDATE reservations SET
+      checkin_amount=$1, checkin_method=$2,
+      price_paid=$3, payment_status=$4
+    WHERE id=$5
+  `, [chk, checkin_method || 'Efectivo', price_paid, payment_status, id]);
+
+  res.json({ success: true, price_paid, payment_status });
+});
