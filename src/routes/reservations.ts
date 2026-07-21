@@ -89,7 +89,7 @@ router.get("/owner/reservations", ownerAuthMiddleware, async (_req: Request, res
     SELECT
       id, guest_name, guest_nationality, num_persons,
       check_in, check_out, price_total,
-      commission_amount, collected_by_us, channel,
+      commission_amount, collected_by_us, channel, settled_at,
       (check_out - check_in) AS nights
     FROM reservations
     WHERE room_id = ANY($1::int[])
@@ -238,6 +238,26 @@ router.patch("/admin/reservations/:id/checkin-payment", authMiddleware, async (r
   `, [chk, checkin_method || 'Efectivo', price_paid, payment_status, id]);
 
   res.json({ success: true, price_paid, payment_status });
+});
+
+// PATCH — liquidar comisión de piso gestionado
+router.patch("/admin/reservations/:id/settle", authMiddleware, async (req: Request, res: Response) => {
+  const { settled_method } = req.body;
+  const method = settled_method === 'BBVA' ? 'BBVA' : 'Efectivo';
+  await pool.query(
+    `UPDATE reservations SET settled_at = CURRENT_DATE, settled_method = $1 WHERE id = $2`,
+    [method, Number(req.params.id)]
+  );
+  res.json({ success: true });
+});
+
+// PATCH — deshacer liquidación
+router.patch("/admin/reservations/:id/unsettle", authMiddleware, async (req: Request, res: Response) => {
+  await pool.query(
+    `UPDATE reservations SET settled_at = NULL, settled_method = NULL WHERE id = $1`,
+    [Number(req.params.id)]
+  );
+  res.json({ success: true });
 });
 
 export default router;
