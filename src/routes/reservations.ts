@@ -1,9 +1,12 @@
 import { Router, Request, Response } from "express";
 import { pool } from "../db";
+import { sendToAll } from "./notifications";
 
 const router = Router();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "bcnrooms2024";
 const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "sagrada2026";
+// Colaborador que busca clientes: solo ve el calendario y crea reservas.
+const CALENDAR_PASSWORD = process.env.CALENDAR_PASSWORD || "calendario2026";
 
 // Piso gestionado para un tercero (no es nuestro).
 const MANAGED_ROOM_IDS = [7]; // Sagrada Família
@@ -28,6 +31,16 @@ router.post("/owner/login", (req: Request, res: Response) => {
   }
 });
 
+// Login del colaborador que gestiona el calendario.
+router.post("/calendar/login", (req: Request, res: Response) => {
+  const { password } = req.body;
+  if (password === CALENDAR_PASSWORD) {
+    res.json({ success: true, token: Buffer.from(CALENDAR_PASSWORD).toString("base64") });
+  } else {
+    res.status(401).json({ error: "Invalid password" });
+  }
+});
+
 function authMiddleware(req: Request, res: Response, next: Function) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   const expected = Buffer.from(ADMIN_PASSWORD).toString("base64");
@@ -40,6 +53,16 @@ function ownerAuthMiddleware(req: Request, res: Response, next: Function) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   const expected = Buffer.from(OWNER_PASSWORD).toString("base64");
   if (token === expected) next();
+  else res.status(401).json({ error: "Unauthorized" });
+}
+
+// Acepta el token del colaborador o el del admin, para que el admin
+// pueda abrir /calendario sin volver a autenticarse.
+function calendarAuthMiddleware(req: Request, res: Response, next: Function) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  const calendario = Buffer.from(CALENDAR_PASSWORD).toString("base64");
+  const admin = Buffer.from(ADMIN_PASSWORD).toString("base64");
+  if (token === calendario || token === admin) next();
   else res.status(401).json({ error: "Unauthorized" });
 }
 
@@ -57,6 +80,12 @@ function calcPaymentStatus(price_total: number, deposit: number, checkin: number
   if (total_paid <= 0) return 'pending';
   if (total_paid >= price_total) return 'paid';
   return 'partial';
+}
+
+// Fecha corta para el cuerpo de las notificaciones.
+function fmtDiaMes(fecha: string): string {
+  const d = new Date(String(fecha).split("T")[0] + "T00:00:00");
+  return d.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
 }
 
 // Comisión sugerida al crear una reserva de piso gestionado.
@@ -111,6 +140,68 @@ router.get("/owner/reservations", ownerAuthMiddleware, async (_req: Request, res
   res.json(rows);
 });
 
+// ─────────────────────────────────────────────
+// VISTA DEL COLABORADOR — solo calendario
+// Columnas explícitas: nunca precios de reservas ajenas, pagos,
+// comisiones ni contacto. Lo que no sale de la consulta no se puede
+// filtrar desde el navegador.
+// ─────────────────────────────────────────────
+router.get("/calendar/reservations", calendarAuthMiddleware, async (_req: Request, res: Response) => {
+  const result = await pool.query(`
+    SELECT id, room_id, room_name, guest_name, num_persons, check_in, check_out
+    FROM reservations
+    ORDER BY check_in ASC
+  `);
+  res.json(result.rows);
+});
+
+// Crear reserva. El colaborador SÍ pone el precio acordado, pero nunca
+// registra cobros: price_paid queda a 0 y el admin registra el dinero
+// cuando entra. Así cierra el trato sin tocar las cajas.
+router.post("/calendar/reservations", calendarAuthMiddleware, async (req: Request, res: Response) => {
+  const {
+    room_id, room_name, guest_name, guest_phone, guest_nationality,
+    num_persons, check_in, check_out, price_total, price_per_night, channel, notes
+  } = req.body;
+
+  if (!room_id || !guest_name || !check_in || !check_out)
+    return res.status(400).json({ error: "Faltan campos obligatorios" });
+  if (check_in >= check_out)
+    return res.status(400).json({ error: "Check-out debe ser posterior al check-in" });
+  if (await checkOverlap(room_id, check_in, check_out))
+    return res.status(409).json({ error: "Ya existe una reserva en esa habitación para esas fechas" });
+
+  const total = Number(price_total) || 0;
+  const commission = suggestCommission(room_id, num_persons, check_in, check_out);
+
+  const result = await pool.query(`
+    INSERT INTO reservations (
+      room_id, room_name, guest_name, guest_phone, guest_nationality,
+      num_persons, check_in, check_out, price_total, price_per_night,
+      deposit_amount, deposit_method, checkin_amount, checkin_method,
+      price_paid, payment_status, channel, notes,
+      commission_amount, collected_by_us
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,'Transferencia',0,'Efectivo',0,'pending',$11,$12,$13,false)
+    RETURNING id
+  `, [
+    room_id, room_name, guest_name, guest_phone || null, guest_nationality || null,
+    num_persons || 1, check_in, check_out,
+    total || null, price_per_night || null,
+    channel || 'WhatsApp',
+    notes ? `[Colaborador] ${notes}` : '[Creada por el colaborador]',
+    commission,
+  ]);
+
+  // Aviso push, sin bloquear la respuesta ni romperla si el envío falla.
+  sendToAll({
+    title: `Reserva del colaborador · ${guest_name}`,
+    body: `${room_name || 'Habitación'} · ${fmtDiaMes(check_in)} → ${fmtDiaMes(check_out)} · ${total > 0 ? `${total}€` : 'sin precio'}`,
+    url: '/admin',
+  }).catch(() => {});
+
+  res.json({ success: true, id: result.rows[0].id });
+});
+
 router.post("/admin/reservations", authMiddleware, async (req: Request, res: Response) => {
   const {
     room_id, room_name, guest_name, guest_email, guest_phone, guest_nationality,
@@ -157,6 +248,16 @@ router.post("/admin/reservations", authMiddleware, async (req: Request, res: Res
     price_paid, payment_status, channel || 'whatsapp', notes || null,
     commission, collected
   ]);
+
+  // Aviso push. No bloquea la respuesta ni la rompe si el envío falla.
+  const nochesRes = Math.max(0, Math.round(
+    (new Date(check_out).getTime() - new Date(check_in).getTime()) / 86400000
+  ));
+  sendToAll({
+    title: `Nueva reserva · ${guest_name}`,
+    body: `${room_name || 'Habitación'} · ${fmtDiaMes(check_in)} → ${fmtDiaMes(check_out)} · ${nochesRes} ${nochesRes === 1 ? 'noche' : 'noches'} · ${total > 0 ? `${total}€` : 'sin precio'}`,
+    url: '/admin',
+  }).catch(() => {});
 
   res.json({ success: true, id: result.rows[0].id });
 });
