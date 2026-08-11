@@ -1,15 +1,10 @@
 import { Router, Request, Response } from "express";
 import { pool } from "../db";
+import { authMiddleware } from "../auth";
 
 const router = Router();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "bcnrooms2024";
 
-function authMiddleware(req: Request, res: Response, next: Function) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
-  const expected = Buffer.from(ADMIN_PASSWORD).toString("base64");
-  if (token === expected) next();
-  else res.status(401).json({ error: "Unauthorized" });
-}
 
 // GET todos los gastos
 router.get("/admin/expenses", authMiddleware, async (_req: Request, res: Response) => {

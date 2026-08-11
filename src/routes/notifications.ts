@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import webpush from "web-push";
 import { pool } from "../db";
+import { authMiddleware } from "../auth";
 
 const router = Router();
 
@@ -12,12 +13,6 @@ const CRON_KEY = process.env.CRON_KEY || "bcn-cron-2026";
 
 webpush.setVapidDetails('mailto:bcnrooms01@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
 
-function authMiddleware(req: Request, res: Response, next: Function) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
-  const expected = Buffer.from(ADMIN_PASSWORD).toString("base64");
-  if (token === expected) next();
-  else res.status(401).json({ error: "Unauthorized" });
-}
 
 export async function initNotifications() {
   await pool.query(`

@@ -17,9 +17,12 @@ if (!JWT_SECRET) {
   console.warn("[auth] Falta JWT_SECRET. El login con JWT no funcionará.");
 }
 
-// Contraseñas del esquema antiguo
+// Contraseñas del esquema antiguo.
+// OJO: la del propietario de Sagrada NO se contempla aquí a propósito.
+// Es una persona ajena con acceso de solo lectura a su piso, y su
+// middleware sigue viviendo aparte en reservations.ts. Si se mapeara
+// a un rol interno, su token abriría el panel de administración.
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "bcnrooms2024";
-const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "sagrada2026";
 const CALENDAR_PASSWORD = process.env.CALENDAR_PASSWORD || "bcnroom2026";
 const LEGACY_ENABLED = process.env.LEGACY_AUTH !== "false";
 
@@ -58,7 +61,6 @@ function resolverLegacy(token: string): Auth | null {
   const b64 = (s: string) => Buffer.from(s).toString("base64");
   if (token === b64(ADMIN_PASSWORD))    return { userId: null, accountId: LEGACY_ACCOUNT_ID, role: "owner",    legacy: true };
   if (token === b64(CALENDAR_PASSWORD)) return { userId: null, accountId: LEGACY_ACCOUNT_ID, role: "calendar", legacy: true };
-  if (token === b64(OWNER_PASSWORD))    return { userId: null, accountId: LEGACY_ACCOUNT_ID, role: "staff",    legacy: true };
   return null;
 }
 
