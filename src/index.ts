@@ -6,6 +6,7 @@ import notificationRoutes, { initNotifications } from "./routes/notifications";
 import expenseRoutes from "./routes/expenses";
 import authRoutes from "./routes/authRoutes";
 import { initDb } from "./db";
+import clientRoutes from "./routes/client";
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.use(reservationRoutes);
 app.use(notificationRoutes);
 app.use(expenseRoutes);
 app.use(authRoutes);
+app.use(clientRoutes);
 
 const PORT = process.env.PORT || 3001;
 
