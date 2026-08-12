@@ -458,4 +458,90 @@ router.patch("/client/reservations/:id/payment", auth, async (req: Request, res:
   res.json({ success: true });
 });
 
+// ─────────────────────────────────────────────
+// GASTOS
+//
+// La tabla expenses viene del panel antiguo y exige property_id y
+// property_name como texto. Para las cuentas nuevas se rellenan a
+// partir del piso real, y property_ref guarda el enlace de verdad.
+// ─────────────────────────────────────────────
+
+router.get("/client/expenses", auth, async (req: Request, res: Response) => {
+  const r = await pool.query(
+    `SELECT e.id, e.property_ref, e.category, e.description, e.amount, e.date,
+            e.payment_method, e.paid_by, e.own_money, e.reimbursed_at, p.name AS property_name
+     FROM expenses e
+     LEFT JOIN properties p ON p.id = e.property_ref
+     WHERE e.account_id = $1
+     ORDER BY e.date DESC, e.id DESC`,
+    [cuentaDe(req)]
+  );
+  res.json(r.rows);
+});
+
+router.post("/client/expenses", auth, async (req: Request, res: Response) => {
+  const accountId = cuentaDe(req);
+  const propertyRef = Number(req.body?.property_ref);
+  const amount = Number(req.body?.amount);
+  const description = String(req.body?.description || "").trim();
+
+  if (!propertyRef || !description || !(amount > 0) || !req.body?.date)
+    return res.status(400).json({ error: "Faltan campos obligatorios" });
+  if (!(await pisoDeLaCuenta(propertyRef, accountId)))
+    return res.status(404).json({ error: "Piso no encontrado" });
+
+  const piso = await pool.query(`SELECT name FROM properties WHERE id = $1`, [propertyRef]);
+  const nombrePiso = piso.rows[0]?.name || "Piso";
+
+  const r = await pool.query(
+    `INSERT INTO expenses (account_id, property_id, property_name, property_ref,
+                           category, description, amount, date, payment_method, own_money)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+     RETURNING id`,
+    [
+      accountId, String(propertyRef), nombrePiso, propertyRef,
+      req.body?.category || "Otros", description, amount, req.body.date,
+      req.body?.payment_method || "Efectivo",
+    ]
+  );
+  res.json({ success: true, id: r.rows[0].id });
+});
+
+router.put("/client/expenses/:id", auth, async (req: Request, res: Response) => {
+  const accountId = cuentaDe(req);
+  const id = Number(req.params.id);
+  const propertyRef = Number(req.body?.property_ref);
+
+  const actual = await pool.query(
+    `SELECT id FROM expenses WHERE id = $1 AND account_id = $2`, [id, accountId]
+  );
+  if (!actual.rows[0]) return res.status(404).json({ error: "Gasto no encontrado" });
+  if (propertyRef && !(await pisoDeLaCuenta(propertyRef, accountId)))
+    return res.status(404).json({ error: "Piso no encontrado" });
+
+  const piso = await pool.query(`SELECT name FROM properties WHERE id = $1`, [propertyRef]);
+  const nombrePiso = piso.rows[0]?.name || "Piso";
+
+  await pool.query(
+    `UPDATE expenses SET property_id=$1, property_name=$2, property_ref=$3,
+            category=$4, description=$5, amount=$6, date=$7, payment_method=$8
+     WHERE id=$9 AND account_id=$10`,
+    [
+      String(propertyRef), nombrePiso, propertyRef,
+      req.body?.category || "Otros", req.body?.description, Number(req.body?.amount) || 0,
+      req.body?.date, req.body?.payment_method || "Efectivo", id, accountId,
+    ]
+  );
+  res.json({ success: true });
+});
+
+router.delete("/client/expenses/:id", auth, async (req: Request, res: Response) => {
+  const r = await pool.query(
+    `DELETE FROM expenses WHERE id = $1 AND account_id = $2`,
+    [Number(req.params.id), cuentaDe(req)]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Gasto no encontrado" });
+  res.json({ success: true });
+});
+
 export default router;
