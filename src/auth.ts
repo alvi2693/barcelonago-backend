@@ -29,6 +29,13 @@ const LEGACY_ENABLED = process.env.LEGACY_AUTH !== "false";
 // La cuenta a la que pertenecen los tokens antiguos: vosotros.
 const LEGACY_ACCOUNT_ID = Number(process.env.LEGACY_ACCOUNT_ID || 1);
 
+// La cuenta dueña del panel /admin.
+// Las rutas /admin/* todavía NO filtran por cuenta, así que comprobar
+// solo el rol no vale: cualquier cliente es "owner" de la suya y
+// entraría con su propio token. Hasta que esas consultas filtren por
+// account_id, aquí se exige además pertenecer a esta cuenta.
+const ADMIN_ACCOUNT_ID = Number(process.env.ADMIN_ACCOUNT_ID || LEGACY_ACCOUNT_ID);
+
 export type Rol = "owner" | "staff" | "calendar";
 
 export interface Auth {
@@ -94,9 +101,25 @@ export function requireAuth(...roles: Rol[]) {
   };
 }
 
+// Exige sesión válida, rol permitido Y pertenecer a la cuenta del panel.
+export function requireAdminAccount(...roles: Rol[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const auth = resolverAuth(req);
+    if (!auth) return res.status(401).json({ error: "Unauthorized" });
+    if (auth.accountId !== ADMIN_ACCOUNT_ID) {
+      return res.status(403).json({ error: "Esta cuenta no tiene acceso a este panel" });
+    }
+    if (roles.length && !roles.includes(auth.role)) {
+      return res.status(403).json({ error: "No tienes permiso para esta operación" });
+    }
+    req.auth = auth;
+    next();
+  };
+}
+
 // Atajos con los mismos nombres que usa el código actual
-export const authMiddleware      = requireAuth("owner", "staff");
-export const calendarMiddleware  = requireAuth("owner", "staff", "calendar");
+export const authMiddleware      = requireAdminAccount("owner", "staff");
+export const calendarMiddleware  = requireAdminAccount("owner", "staff", "calendar");
 export const anyAuthMiddleware   = requireAuth();
 
 // La cuenta de quien hace la petición. Toda consulta debería filtrar
