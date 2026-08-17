@@ -63,6 +63,59 @@ async function checkOverlap(room_id: number, check_in: string, check_out: string
   return r.rows.length > 0;
 }
 
+// ── Renta mensual ──
+// A diferencia del panel de administración, aquí cualquier habitación
+// puede alquilarse por meses: es el negocio del cliente, no el nuestro.
+
+function esMensual(t?: string): boolean { return t === "monthly"; }
+
+function primerDiaDelMes(fecha: string): string {
+  const [y, m] = String(fecha).split("T")[0].split("-").map(Number);
+  return `${y}-${String(m).padStart(2, "0")}-01`;
+}
+
+function sumarMesesFecha(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1 + n, 1);
+  const ultimo = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+  dt.setDate(Math.min(d, ultimo));
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+// Una fila por mes. La primera vence el día de entrada; las siguientes,
+// el día 1 de cada mes posterior.
+async function generarMensualidades(accountId: number, reservationId: number, check_in: string, meses: number, importe: number) {
+  const inicio = String(check_in).split("T")[0];
+  for (let i = 0; i < meses; i++) {
+    const periodo = i === 0 ? inicio : primerDiaDelMes(sumarMesesFecha(primerDiaDelMes(inicio), i));
+    await pool.query(
+      `INSERT INTO rent_payments (account_id, reservation_id, period_start, amount) VALUES ($1,$2,$3,$4)`,
+      [accountId, reservationId, periodo, importe]
+    );
+  }
+}
+
+// En renta mensual, lo cobrado son la señal más las mensualidades pagadas.
+async function recalcularMensual(reservationId: number) {
+  const r = await pool.query(
+    `SELECT price_total, deposit_amount FROM reservations WHERE id = $1`, [reservationId]
+  );
+  if (!r.rows[0]) return;
+  const total = Number(r.rows[0].price_total) || 0;
+  const dep = Number(r.rows[0].deposit_amount) || 0;
+
+  const c = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS cobrado FROM rent_payments
+     WHERE reservation_id = $1 AND paid_at IS NOT NULL`, [reservationId]
+  );
+  const cobrado = dep + (Number(c.rows[0].cobrado) || 0);
+
+  await pool.query(
+    `UPDATE reservations SET price_paid = $1, payment_status = $2 WHERE id = $3`,
+    [cobrado, estadoPago(total, cobrado), reservationId]
+  );
+}
+
 function estadoPago(total: number, cobrado: number): string {
   if (cobrado <= 0) return "pending";
   if (cobrado >= total) return "paid";
@@ -297,7 +350,8 @@ router.get("/client/reservations", auth, async (req: Request, res: Response) => 
     `SELECT id, room_id, room_name, guest_name, guest_phone, guest_nationality,
             num_persons, check_in, check_out, price_total, price_per_night,
             price_paid, payment_status, deposit_amount, deposit_method,
-            checkin_amount, checkin_method, channel, notes, no_show, created_at
+            checkin_amount, checkin_method, channel, notes, no_show,
+            rental_type, monthly_rate, created_at
      FROM reservations
      WHERE account_id = $1
      ORDER BY check_in ASC`, [accountId]
@@ -311,6 +365,7 @@ router.post("/client/reservations", auth, async (req: Request, res: Response) =>
     room_id, guest_name, guest_phone, guest_nationality, num_persons,
     check_in, check_out, price_total, price_per_night,
     deposit_amount, deposit_method, checkin_amount, checkin_method, channel, notes,
+    rental_type, monthly_rate, months_count,
   } = req.body;
 
   const roomId = Number(room_id);
@@ -333,9 +388,14 @@ router.post("/client/reservations", auth, async (req: Request, res: Response) =>
   );
   const roomName = nombre.rows[0] ? `${nombre.rows[0].piso} - ${nombre.rows[0].hab}` : "";
 
+  const mensual = esMensual(rental_type);
+  const meses = mensual ? Math.max(1, Number(months_count) || 1) : 0;
+  const importeMes = mensual ? Number(monthly_rate) || 0 : 0;
+
   const dep = Number(deposit_amount) || 0;
-  const chk = Number(checkin_amount) || 0;
-  const total = Number(price_total) || 0;
+  // En renta mensual no hay pago al entrar: lo marcan las mensualidades.
+  const chk = mensual ? 0 : Number(checkin_amount) || 0;
+  const total = mensual ? importeMes * meses : Number(price_total) || 0;
   const cobrado = dep + chk;
 
   const r = await pool.query(
@@ -343,19 +403,25 @@ router.post("/client/reservations", auth, async (req: Request, res: Response) =>
        account_id, room_id, room_name, guest_name, guest_phone, guest_nationality,
        num_persons, check_in, check_out, price_total, price_per_night,
        deposit_amount, deposit_method, checkin_amount, checkin_method,
-       price_paid, payment_status, channel, notes, no_show
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false)
+       price_paid, payment_status, channel, notes, no_show,
+       rental_type, monthly_rate
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,$20,$21)
      RETURNING id`,
     [
       accountId, roomId, roomName, guest_name, guest_phone || null, guest_nationality || null,
       Number(num_persons) || 1, check_in, check_out,
-      total || null, price_per_night || null,
+      total || null, mensual ? null : price_per_night || null,
       dep, deposit_method || "Transferencia",
       chk, checkin_method || "Efectivo",
       cobrado, estadoPago(total, cobrado), channel || "Directo", notes || null,
+      mensual ? "monthly" : "nightly", mensual ? importeMes : null,
     ]
   );
-  res.json({ success: true, id: r.rows[0].id });
+
+  const nuevaId = r.rows[0].id;
+  if (mensual) await generarMensualidades(accountId, nuevaId, check_in, meses, importeMes);
+
+  res.json({ success: true, id: nuevaId });
 });
 
 router.put("/client/reservations/:id", auth, async (req: Request, res: Response) => {
@@ -363,7 +429,7 @@ router.put("/client/reservations/:id", auth, async (req: Request, res: Response)
   const id = Number(req.params.id);
 
   const actual = await pool.query(
-    `SELECT room_id FROM reservations WHERE id = $1 AND account_id = $2`, [id, accountId]
+    `SELECT room_id, rental_type FROM reservations WHERE id = $1 AND account_id = $2`, [id, accountId]
   );
   if (!actual.rows[0]) return res.status(404).json({ error: "Reserva no encontrada" });
 
@@ -387,10 +453,21 @@ router.put("/client/reservations/:id", auth, async (req: Request, res: Response)
   );
   const roomName = nombre.rows[0] ? `${nombre.rows[0].piso} - ${nombre.rows[0].hab}` : "";
 
+  const eraMensual = esMensual(actual.rows[0].rental_type);
   const dep = Number(deposit_amount) || 0;
-  const chk = Number(checkin_amount) || 0;
+  const chk = eraMensual ? 0 : Number(checkin_amount) || 0;
   const total = Number(price_total) || 0;
-  const cobrado = dep + chk;
+
+  // Si es mensual, lo cobrado lo mandan las mensualidades: recalcular
+  // aquí borraría los cobros ya marcados.
+  let cobrado = dep + chk;
+  if (eraMensual) {
+    const c = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS cobrado FROM rent_payments
+       WHERE reservation_id = $1 AND paid_at IS NOT NULL`, [id]
+    );
+    cobrado = dep + (Number(c.rows[0].cobrado) || 0);
+  }
 
   await pool.query(
     `UPDATE reservations SET
@@ -476,6 +553,99 @@ router.patch("/client/reservations/:id/payment", auth, async (req: Request, res:
     [chk, req.body?.checkin_method || "Efectivo", cobrado, estadoPago(total, cobrado), id]
   );
   res.json({ success: true });
+});
+
+// ─────────────────────────────────────────────
+// MENSUALIDADES
+// ─────────────────────────────────────────────
+
+router.get("/client/rent-payments", auth, async (req: Request, res: Response) => {
+  const r = await pool.query(
+    `SELECT rp.id, rp.reservation_id, rp.period_start, rp.amount, rp.paid_at, rp.method,
+            res.guest_name, res.room_id, res.room_name
+     FROM rent_payments rp
+     JOIN reservations res ON res.id = rp.reservation_id
+     WHERE res.account_id = $1
+     ORDER BY rp.period_start ASC`,
+    [cuentaDe(req)]
+  );
+  res.json(r.rows);
+});
+
+// Comprueba que la mensualidad pertenece a la cuenta antes de tocarla.
+async function mensualidadDeLaCuenta(id: number, accountId: number): Promise<number | null> {
+  const r = await pool.query(
+    `SELECT rp.reservation_id FROM rent_payments rp
+     JOIN reservations res ON res.id = rp.reservation_id
+     WHERE rp.id = $1 AND res.account_id = $2`, [id, accountId]
+  );
+  return r.rows[0] ? Number(r.rows[0].reservation_id) : null;
+}
+
+router.patch("/client/rent-payments/:id/pay", auth, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const resId = await mensualidadDeLaCuenta(id, cuentaDe(req));
+  if (!resId) return res.status(404).json({ error: "Mensualidad no encontrada" });
+
+  await pool.query(`
+    UPDATE rent_payments
+    SET paid_at = COALESCE($1::date, CURRENT_DATE),
+        method  = $2,
+        amount  = COALESCE($3, amount)
+    WHERE id = $4
+  `, [
+    req.body?.paid_at || null,
+    req.body?.method || "Efectivo",
+    req.body?.amount !== undefined && req.body?.amount !== null && req.body?.amount !== "" ? Number(req.body.amount) : null,
+    id,
+  ]);
+
+  await recalcularMensual(resId);
+  res.json({ success: true });
+});
+
+router.patch("/client/rent-payments/:id/unpay", auth, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const resId = await mensualidadDeLaCuenta(id, cuentaDe(req));
+  if (!resId) return res.status(404).json({ error: "Mensualidad no encontrada" });
+
+  await pool.query(`UPDATE rent_payments SET paid_at = NULL, method = NULL WHERE id = $1`, [id]);
+  await recalcularMensual(resId);
+  res.json({ success: true });
+});
+
+// El inquilino prorroga un mes más.
+router.post("/client/reservations/:id/extend-month", auth, async (req: Request, res: Response) => {
+  const accountId = cuentaDe(req);
+  const id = Number(req.params.id);
+
+  const r = await pool.query(
+    `SELECT room_id, check_out, monthly_rate, rental_type
+     FROM reservations WHERE id = $1 AND account_id = $2`, [id, accountId]
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "Reserva no encontrada" });
+  if (!esMensual(r.rows[0].rental_type))
+    return res.status(400).json({ error: "Esta reserva no es de renta mensual" });
+
+  const co = String(r.rows[0].check_out).split("T")[0];
+  const nuevoCheckOut = sumarMesesFecha(co, 1);
+
+  if (await checkOverlap(r.rows[0].room_id, co, nuevoCheckOut, id))
+    return res.status(409).json({ error: "El mes siguiente ya está ocupado por otra reserva" });
+
+  const importe = Number(req.body?.monthly_rate) || Number(r.rows[0].monthly_rate) || 0;
+
+  await pool.query(
+    `INSERT INTO rent_payments (account_id, reservation_id, period_start, amount) VALUES ($1,$2,$3,$4)`,
+    [accountId, id, primerDiaDelMes(co), importe]
+  );
+  await pool.query(
+    `UPDATE reservations SET check_out = $1, price_total = COALESCE(price_total, 0) + $2 WHERE id = $3`,
+    [nuevoCheckOut, importe, id]
+  );
+  await recalcularMensual(id);
+
+  res.json({ success: true, check_out: nuevoCheckOut });
 });
 
 // ─────────────────────────────────────────────
