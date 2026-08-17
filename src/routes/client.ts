@@ -12,7 +12,27 @@ const router = Router();
 // cada endpoint comprueba la pertenencia antes de escribir.
 // ─────────────────────────────────────────────
 
-const auth = requireAuth("owner", "staff");
+const soloRol = requireAuth("owner", "staff");
+
+// Además del rol, comprueba que la cuenta del token sigue existiendo.
+// Si se borró la cuenta, el token viejo sigue siendo válido para el
+// JWT pero cualquier alta revienta con un fallo de clave ajena que no
+// dice nada. Mejor un 401 claro que invite a volver a entrar.
+async function auth(req: Request, res: Response, next: Function) {
+  soloRol(req, res, async () => {
+    try {
+      const r = await pool.query(
+        `SELECT 1 FROM accounts WHERE id = $1 AND active = true`, [cuentaDe(req)]
+      );
+      if (r.rows.length === 0) {
+        return res.status(401).json({ error: "Tu sesión ya no es válida. Vuelve a entrar." });
+      }
+      next();
+    } catch {
+      res.status(500).json({ error: "No se pudo comprobar la sesión" });
+    }
+  });
+}
 
 // Comprueba que un piso es de la cuenta indicada.
 async function pisoDeLaCuenta(propertyId: number, accountId: number): Promise<boolean> {

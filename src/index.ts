@@ -5,8 +5,9 @@ import reservationRoutes from "./routes/reservations";
 import notificationRoutes, { initNotifications } from "./routes/notifications";
 import expenseRoutes from "./routes/expenses";
 import authRoutes from "./routes/authRoutes";
-import { initDb } from "./db";
+import clientRoutes from "./routes/client";
 import partnerRoutes from "./routes/partners";
+import { initDb } from "./db";
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use(reservationRoutes);
 app.use(notificationRoutes);
 app.use(expenseRoutes);
 app.use(authRoutes);
+app.use(clientRoutes);
 app.use(partnerRoutes);
 
 const PORT = process.env.PORT || 3001;
