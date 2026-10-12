@@ -1,7 +1,6 @@
 import { Router, Request, Response } from "express";
 import { pool } from "../db";
 import { sendToAll } from "./notifications";
-import { authMiddleware, calendarMiddleware as calendarAuthMiddleware } from "../auth";
 
 const router = Router();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "bcnrooms2024";
@@ -13,9 +12,12 @@ const CALENDAR_PASSWORD = process.env.CALENDAR_PASSWORD || "bcnroom2026";
 const MANAGED_ROOM_IDS = [7]; // Sagrada Família
 const DEFAULT_COMMISSION_PER_PAX_NIGHT = 4;
 
-// Solo las medianas del Born admiten renta mensual.
-// Hab. 3, Hab. 4 y Hab. 5 del Born.
-const MONTHLY_ROOM_IDS = [2, 3, 4];
+// Todas las habitaciones de los pisos propios admiten renta mensual, además
+// de la estancia por noches. Solo queda fuera lo gestionado para terceros.
+//   Sagrera: 1, 8, 9
+//   Born:    2, 3, 4, 5, 6
+//   Clot:    10, 11
+const MONTHLY_ROOM_IDS = [1, 2, 3, 4, 5, 6, 8, 9, 10, 11];
 
 router.post("/admin/login", (req: Request, res: Response) => {
   const { password } = req.body;
@@ -46,7 +48,12 @@ router.post("/calendar/login", (req: Request, res: Response) => {
   }
 });
 
-
+function authMiddleware(req: Request, res: Response, next: Function) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  const expected = Buffer.from(ADMIN_PASSWORD).toString("base64");
+  if (token === expected) next();
+  else res.status(401).json({ error: "Unauthorized" });
+}
 
 // Solo permite el token del propietario. NO da acceso a otros pisos.
 function ownerAuthMiddleware(req: Request, res: Response, next: Function) {
@@ -56,7 +63,15 @@ function ownerAuthMiddleware(req: Request, res: Response, next: Function) {
   else res.status(401).json({ error: "Unauthorized" });
 }
 
-
+// Acepta el token del colaborador o el del admin, para que el admin
+// pueda abrir /calendario sin volver a autenticarse.
+function calendarAuthMiddleware(req: Request, res: Response, next: Function) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  const calendario = Buffer.from(CALENDAR_PASSWORD).toString("base64");
+  const admin = Buffer.from(ADMIN_PASSWORD).toString("base64");
+  if (token === calendario || token === admin) next();
+  else res.status(401).json({ error: "Unauthorized" });
+}
 
 // Las reservas marcadas como "no vino" liberan la habitación: no bloquean
 // esas fechas, aunque la fila siga existiendo para conservar el ingreso.
